@@ -4,7 +4,7 @@ from typing import Optional, Union
 
 import re
 import requests
-import yaml
+import json
 import unicodedata
 from bs4 import BeautifulSoup, Tag
 from pydantic import BaseModel
@@ -14,38 +14,7 @@ from ics import Calendar
 CODING_CLUB_BANNER = "/assets/images/events/event-coding-club-3.jpg"
 WRITING_CLUB_BANNER = "/assets/images/events/event-writing-club.jpeg"
 
-# ----- YAML formatting classes -----
-class LiteralString(str): pass
-class QuotedString(str): pass
-class NoQuoteString(str): pass
 
-def literal_string_representer(dumper, data):
-    return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='|')
-
-def double_quote_representer(dumper, data):
-    return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
-
-def no_quote(dumper, data):
-    return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='')
-
-yaml.add_representer(LiteralString, literal_string_representer)
-yaml.add_representer(QuotedString, double_quote_representer)
-yaml.add_representer(NoQuoteString, no_quote)
-
-
-def to_literal_str(data: str) -> Union[LiteralString, str]:
-    special_characters = "!@#$%^&*()-+?_=,<>/:;\\"
-
-    if data and ("\n" in data or any(c in special_characters for c in data)):
-        return LiteralString(data.rstrip() + "\n")
-    return data
-
-def to_quoted_str(data: str) -> Union[QuotedString, NoQuoteString]:
-    special_characters = "!@#$%^&*()-+?_=,<>/:;\\"
-
-    if data and ("\n" in data or any(c in special_characters for c in data)):
-        return QuotedString(data)
-    return NoQuoteString(data)
 
 
 # ----- Models ------
@@ -144,12 +113,8 @@ def clean_description(text: str) -> str:
 # ----- Truncates event description to 1st sentence only and removes WCC prefix in sentence -----
 def get_formatted_event_description(event_desc: str) -> str:
     full_description = (clean_description(event_desc) or "").strip()
-    # first_sentence = full_description.split(".")[0].strip()
-    # if first_sentence:
-    #     description = f"{first_sentence}."
-    # else:
-    #     description = full_description # use full description if cannot truncate to 1st sentence only
-    description = full_description
+    description = full_description.split("About Women Coding Community", 1)[0]
+    print(f'{description=}')
 
     prefix = "Women Coding Community"
     if full_description.strip().startswith(prefix):
@@ -237,16 +202,18 @@ def get_upcoming_meetups_from_ical_file(ical_path: str) -> list[MeetupEvents]:
 
 # --- Processing and output ---
 def process_meetup_data(meetup: dict) -> dict:
-    meetup["title"] = to_literal_str(meetup["title"])
-    meetup["description"] = to_literal_str(meetup["description"])
-    meetup["expiration"] = QuotedString(meetup["expiration"])
-    meetup["host"] = QuotedString(meetup.get("host", ""))
-    meetup["speaker"] = QuotedString(meetup.get("speaker", ""))
-    if "image" in meetup:
-        meetup["image"]["path"] = to_quoted_str(meetup["image"]["path"])
-        meetup["image"]["alt"] = to_quoted_str(meetup["image"]["alt"])
-    if "link" in meetup and "title" in meetup["link"]:
-        meetup["link"]["title"] = to_quoted_str(meetup["link"]["title"])
+    # Convert all values to plain JSON-serializable types (strings)
+    meetup["title"] = str(meetup.get("title", ""))
+    meetup["description"] = str(meetup.get("description", "")).rstrip("\n")
+    meetup["expiration"] = str(meetup.get("expiration", ""))
+    meetup["host"] = str(meetup.get("host", ""))
+    meetup["speaker"] = str(meetup.get("speaker", ""))
+    if "image" in meetup and isinstance(meetup["image"], dict):
+        meetup["image"]["path"] = str(meetup["image"].get("path", ""))
+        meetup["image"]["alt"] = str(meetup["image"].get("alt", ""))
+    if "link" in meetup and isinstance(meetup["link"], dict):
+        meetup["link"]["path"] = str(meetup["link"].get("path", ""))
+        meetup["link"]["title"] = str(meetup["link"].get("title", "View meetup event"))
     return meetup
 
 # --- Create a unique key for an event using "title - date" ----
@@ -260,24 +227,25 @@ def get_existing_event_keys(events):
 # --- Get existing events in yml file ----
 def load_existing_events_from_file(file_path):
     try:
-        with open(file_path, "r") as file:
-            return yaml.safe_load(file) or []
+        with open(file_path, "r", encoding="utf-8") as file:
+            return json.load(file) or []
     except FileNotFoundError:
         return []
-    except (IOError, yaml.YAMLError) as e:
+    except (IOError, json.JSONDecodeError) as e:
         logging.error(f"Error reading file '{file_path}': {e}")
         return []
 
 # ---- Appends specified data to yml file -----
-def append_events_to_yaml_file(file_path, data):
+def append_events_to_json_file(file_path, data):
     try:
-        with open(file_path, "a") as file:
-            for yaml_obj in data:
-                file.write("\n")
-                # allow unicode to keep apostrophes instead of replaing with \u2019 for readability
-                file.write(yaml.dump([yaml_obj], sort_keys=False, width=2000, allow_unicode=True))
-    except (IOError, yaml.YAMLError) as e:
-        logging.error(f"Error appending new events to file '{file_path}': {e}")
+        # Load existing events (if any), append new ones, then write full JSON array
+        existing = load_existing_events_from_file(file_path) or []
+        # Ensure incoming items are JSON-serializable dicts
+        existing.extend(data)
+        with open(file_path, "w", encoding="utf-8") as file:
+            json.dump(existing, file, ensure_ascii=False, indent=2)
+    except (IOError, TypeError) as e:
+        logging.error(f"Error writing new events to file '{file_path}': {e}")
         raise
 
 # --- Script Start ---
@@ -285,12 +253,12 @@ def fetch_events():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     ical_file_path = "files/meetup.ics"
-    yml_file_path = "data/events.yml"
+    json_file_path = "data/events.json"
 
-    logging.info("Params: iCal URL: %s yml: %s", ical_file_path, yml_file_path)
+    logging.info("Params: iCal URL: %s json: %s", ical_file_path, json_file_path)
     upcoming_events = get_upcoming_meetups_from_ical_file(ical_file_path)
 
-    existing_events = load_existing_events_from_file(yml_file_path)
+    existing_events = load_existing_events_from_file(json_file_path)
     existing_keys = get_existing_event_keys(existing_events)
     added_events = []
     
@@ -308,8 +276,8 @@ def fetch_events():
             logging.info(f"{event_key} already exists in events.yml")
 
     if len(added_events) > 0:
-        append_events_to_yaml_file(yml_file_path, added_events)
-        logging.info(f"Added {len(added_events)} new event(s) to events.yml.")
+        append_events_to_json_file(json_file_path, added_events)
+        logging.info(f"Added {len(added_events)} new event(s) to events.json.")
     else:
         logging.info("No new events to add.")
 
