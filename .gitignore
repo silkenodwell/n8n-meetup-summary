@@ -2,3 +2,4 @@ launch.json
 data/
 myenv/
 files/
+.vscode/
