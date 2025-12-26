@@ -39,5 +39,6 @@ jobs:
 
       - name: Run Meetup import script
         run: |
+            mkdir data
             python meetup_import.py
             
