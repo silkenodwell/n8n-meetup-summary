@@ -41,4 +41,10 @@ jobs:
         run: |
             mkdir data
             python meetup_import.py
+      
+      - name: Post results to n8n
+        run: |
+            curl -X POST https://silkenodwell.app.n8n.cloud/webhook/1222d6d4-5523-4c47-a3c6-a7eddf6e5f1c -H \
+            "Content-Type: application/json" -d '{"content": "hello world"}'
+
             
