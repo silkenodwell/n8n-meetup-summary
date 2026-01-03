@@ -3,7 +3,8 @@ name: Import Meetup Events
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * *' # every day at 6am GMT
+    - cron: '0 7 * * 1' # every Monday at 7am GMT
+    - cron: '0 7 * * 4' # every Thursday at 7am GMT
 
 jobs:
   import-meetup:
@@ -45,6 +46,6 @@ jobs:
       - name: Post results to n8n
         run: |
             curl -X POST https://silkenodwell.app.n8n.cloud/webhook/1222d6d4-5523-4c47-a3c6-a7eddf6e5f1c -H \
-            "Content-Type: application/json" -d '{"content": "hello world"}'
+            "Content-Type: application/json" -d @data/events.json
 
             
